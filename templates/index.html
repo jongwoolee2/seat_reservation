@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>공연 관람 신청</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- SweetAlert2 CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
+    <style>
+        /* SweetAlert2 버튼 스타일 커스터마이징 */
+        .swal2-cancel, .swal2-confirm, .swal2-deny {
+            white-space: nowrap; /* 텍스트 줄바꿈 방지 */
+            min-width: 80px; /* 버튼 최소 너비 설정 */
+            padding: 10px 15px; /* 패딩 조정으로 높이와 너비 확보 */
+            height: 40px; /* 버튼 높이 설정 */
+            line-height: 20px; /* 텍스트 수직 중앙 정렬 */
+            display: inline-flex; /* 플렉스 박스로 중앙 정렬 */
+            align-items: center; /* 수직 중앙 정렬 */
+            justify-content: center; /* 수평 중앙 정렬 */
+        }
+        .swal2-deny {
+            background-color: #f0ad4e; /* "수정" 버튼 색상 (주황색) */
+            border: none;
+        }
+        #qrcode-container {
+            margin: 20px auto;
+            text-align: center;
+        }
+        #qr-link {
+            margin-top: 10px;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <h2>공연 관람 신청</h2>
+    <img src="{{ url_for('static', filename='poster.png') }}" alt="공연 포스터">
+
+    <form method="POST" id="applicationForm">
+        <div class="form-group">
+            <label class="required">1. 성함</label>
+            <input type="text" name="name" id="name" placeholder="이름을 입력해주세요." required>
+        </div>
+
+        <div class="form-group">
+            <label class="required">2. 연락처</label>
+            <input type="text" name="contact" id="contact" placeholder="연락처를 입력해주세요. (예: 01012345678)" required>
+        </div>
+
+        <div class="form-group">
+            <label class="required">3. 참석 인원을 선택해 주세요</label>
+            <select id="attendees" name="attendees" required>
+                <option value="">선택하세요</option>
+                <option value="1">1명</option>
+                <option value="2">2명</option>
+                <option value="3">3명</option>
+                <option value="4">4명</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label class="required">4. 좌석을 선택해 주세요</label>
+            <div id="stadiv" class="stage">무대</div>
+            <div id="grid" class="grid"></div>
+        </div>
+
+        <div class="form-group" id="privacySection">
+            <label class="required">5. 개인정보 수집 및 이용 동의</label>
+            <p>개인정보 수집 및 이용에 동의합니다.</p>
+            <ul>
+                <li>수집하는 개인정보 항목 : 이름, 연락처 </li>
+                <li>수집 및 이용 목적 : 공연 관람 신청</li>
+                <li>보유 및 이용 기간 : 공연 예약 후 6개월</li>
+            </ul>
+            <p class="warning">수집된 개인정보는 음악회 관련 안내 및 공지 사항 전달에만 사용됩니다.</p>
+            <label>
+                <input type="checkbox" id="privacy"> 개인정보 수집 및 이용에 동의합니다.
+            </label>
+        </div>
+
+        <input type="hidden" name="selected_seats" id="selected_seats" multiple>
+        <input type="hidden" name="seat1" id="seat1">
+        <input type="hidden" name="seat2" id="seat2">
+        <input type="hidden" name="seat3" id="seat3">
+        <input type="hidden" name="seat4" id="seat4">
+        <div class="button-group">
+            <button type="submit" id="submitBtn" disabled>예약</button>
+            <button type="button" id="modifyBtn" style="display: none;" onclick="modifyReservation()">수정</button>
+            <button type="button" id="cancelBtn" style="display: none;" onclick="cancelReservation()">취소</button>
+        </div>
+    </form>
+
+    <!-- SweetAlert2 JS -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
+    <!-- QRCode.js 라이브러리 추가 -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+    <script>
+        const grid = document.getElementById("grid");
+        const columns = 17; /* 8 + 1(spacer) + 8 */
+        const rows = 11;
+        const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+        const attendees = document.getElementById("attendees");
+        let selectedCount = 0;
+        let selectedSeats = [];
+        let originalSeats = []; // 기존 좌석 저장
+        let currentName = "";
+        let currentContact = "";
+        let hasShownWelcomeMessage = false;
+        let debounceTimeout;
+
+        // Grid 생성
+        const gridData = Array(rows).fill().map(() => Array(columns).fill(null));
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < columns; col++) {
+                if (col === 8) continue;
+                const number = row + 1;
+                gridData[row][col] = letters[col < 8 ? col : col - 1] + number;
+            }
+        }
+
+        // Grid를 렌더링하는 함수
+        function renderGrid(allSeats = []) {
+            grid.innerHTML = "";
+            for (let row = 0; row < rows; row++) {
+                for (let col = 0; col < columns; col++) {
+                    if (col === 8) {
+                        const spacer = document.createElement("div");
+                        spacer.classList.add("spacer");
+                        grid.appendChild(spacer);
+                        continue;
+                    }
+
+                    const box = document.createElement("div");
+                    box.classList.add("box");
+                    const label = gridData[row][col];
+                    box.innerText = label;
+
+                    if (allSeats.includes(label)) {
+                        box.classList.add("reserved");
+                    }
+
+                    box.addEventListener("mouseover", () => {
+                        if (!box.classList.contains("clicked") && !box.classList.contains("reserved")) {
+                            box.classList.add("hovered");
+                        }
+                    });
+
+                    box.addEventListener("mouseout", () => {
+                        box.classList.remove("hovered");
+                    });
+
+                    box.addEventListener("click", () => {
+                        if (box.classList.contains("reserved") && !box.classList.contains("clicked")) {
+                            return;
+                        }
+                        const attendeeValue = parseInt(attendees.value);
+                        if (isNaN(attendeeValue)) {
+                            box.classList.remove("hovered");
+                            setTimeout(() => Swal.fire({
+                                icon: 'warning',
+                                title: '참석 인원 선택',
+                                text: '먼저 참석인원을 선택하세요.',
+                            }), 200);
+                            return;
+                        }
+
+                        if (box.classList.contains("clicked")) {
+                            box.classList.remove("clicked");
+                            selectedCount--;
+                            selectedSeats = selectedSeats.filter(seat => seat !== label);
+                        } else {
+                            if (selectedCount >= attendeeValue) {
+                                box.classList.remove("hovered");
+                                setTimeout(() => Swal.fire({
+                                    icon: 'warning',
+                                    title: '좌석 초과',
+                                    text: '선택하신 좌석이 참석인원을 초과하였습니다.',
+                                }), 200);
+                                return;
+                            }
+                            box.classList.remove("hovered");
+                            box.classList.add("clicked");
+                            selectedCount++;
+                            selectedSeats.push(label);
+                        }
+                        updateForm();
+                        validateForm(); // 좌석 선택 후 즉시 validateForm 호출
+                    });
+
+                    grid.appendChild(box);
+                }
+            }
+        }
+
+        // 처음 로딩 시 모든 예약된 좌석 가져오기
+        fetch("/all_seats")
+            .then(response => response.json())
+            .then(data => renderGrid(data.seats));
+
+        // 이름과 전화번호 입력 시 DB 확인
+        const nameInput = document.getElementById("name");
+        const contactInput = document.getElementById("contact");
+        const cancelBtn = document.getElementById("cancelBtn");
+        const modifyBtn = document.getElementById("modifyBtn");
+        const submitBtn = document.getElementById("submitBtn");
+        const privacySection = document.getElementById("privacySection");
+
+        function updateButtonVisibility() {
+            if (hasShownWelcomeMessage) {
+                // 재방문: "확인", "수정", "취소" 버튼 표시
+                submitBtn.textContent = "확인";
+                modifyBtn.style.display = "inline-block";
+                cancelBtn.style.display = "inline-block";
+            } else {
+                // 첫 방문: "예약" 버튼만 표시
+                submitBtn.textContent = "예약";
+                modifyBtn.style.display = "none";
+                cancelBtn.style.display = "none";
+            }
+        }
+
+        function generateQRCode(qrData) {
+            const qrCanvas = document.createElement("canvas");
+            QRCode.toCanvas(qrCanvas, qrData, {
+                width: 128,
+                height: 128,
+                margin: 1,
+                errorCorrectionLevel: 'H'
+            }, (error) => {
+                if (error) console.error("QR Code generation error:", error);
+            });
+            return qrCanvas;
+        }
+
+        function checkExisting() {
+            const name = nameInput.value.trim();
+            const contact = contactInput.value.trim().replace(/-/g, "");
+            currentName = name;
+            currentContact = contact;
+
+            if (name && contact) {
+                fetch("/check_existing", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                    body: `name=${encodeURIComponent(name)}&contact=${encodeURIComponent(contact)}`
+                })
+                .then(response => response.json())
+                .then(data => {
+                    selectedSeats = data.seats;
+                    originalSeats = [...data.seats]; // 기존 좌석 저장
+                    selectedCount = selectedSeats.length;
+                    document.querySelectorAll(".box").forEach(box => {
+                        if (selectedSeats.includes(box.innerText)) {
+                            box.classList.remove("reserved");
+                            box.classList.add("clicked");
+                        }
+                    });
+                    attendees.value = selectedCount > 0 ? selectedCount : "";
+                    if (data.seats.length > 0 && !hasShownWelcomeMessage) {
+                        Swal.fire({
+                            icon: 'info',
+                            title: '환영합니다!',
+                            text: `${name}님, 재방문을 환영합니다. 예약하신 좌석은 ${data.seats.join(", ")} 입니다.`,
+                            confirmButtonText: '확인'
+                        }).then((result) => {
+                            // "확인" 버튼 클릭 시 아무 동작 없음 (팝업 닫힘)
+                        });
+                        hasShownWelcomeMessage = true;
+                        privacySection.style.display = "none"; // 재방문 시 개인정보 섹션 숨김
+                    } else if (data.seats.length === 0) {
+                        hasShownWelcomeMessage = false;
+                        privacySection.style.display = "block"; // 신규 방문 시 개인정보 섹션 표시
+                    }
+                    updateButtonVisibility(); // 버튼 표시 상태 업데이트
+                    validateForm(); // 상태 변경 후 validateForm 호출
+                });
+            } else {
+                hasShownWelcomeMessage = false;
+                privacySection.style.display = "block"; // 이름/연락처 미입력 시 개인정보 섹션 표시
+                updateButtonVisibility(); // 버튼 표시 상태 업데이트
+                validateForm(); // 상태 변경 후 validateForm 호출
+            }
+        }
+
+        // 예약 취소 함수
+        function cancelReservation() {
+            Swal.fire({
+                icon: 'warning',
+                title: '예약 취소',
+                text: '정말 예약을 취소하시겠습니까?',
+                showCancelButton: true,
+                confirmButtonText: '예',
+                cancelButtonText: '아니오'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    fetch("/cancel_reservation", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                        body: `name=${encodeURIComponent(currentName)}&contact=${encodeURIComponent(currentContact)}`
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            Swal.fire({
+                                icon: 'success',
+                                title: '취소 완료',
+                                text: '예약이 취소되었습니다.',
+                                confirmButtonText: '확인'
+                            }).then(() => {
+                                window.close();
+                                setTimeout(() => {
+                                    window.location.href = "{{ url_for('index') }}";
+                                }, 500);
+                            });
+                        } else {
+                            Swal.fire({
+                                icon: 'error',
+                                title: '취소 실패',
+                                text: '예약 취소 실패: ' + data.message,
+                                confirmButtonText: '확인'
+                            });
+                        }
+                    })
+                    .catch(error => {
+                        Swal.fire({
+                            icon: 'error',
+                            title: '오류',
+                            text: '오류 발생: ' + error,
+                            confirmButtonText: '확인'
+                        });
+                    });
+                }
+            });
+        }
+
+        // 좌석 데이터를 폼에 저장하는 함수
+        function setSeatsToForm() {
+            const seatInputs = [
+                document.getElementById("seat1"),
+                document.getElementById("seat2"),
+                document.getElementById("seat3"),
+                document.getElementById("seat4")
+            ];
+
+            // 모든 seat 입력 필드를 초기화
+            seatInputs.forEach(input => input.value = "");
+
+            // 선택된 좌석을 seat1, seat2, seat3, seat4에 저장
+            selectedSeats.forEach((seat, index) => {
+                if (index < 4) {
+                    seatInputs[index].value = seat;
+                }
+            });
+        }
+
+        // 수정 함수
+        function modifyReservation() {
+            if (selectedCount !== parseInt(attendees.value)) {
+                Swal.fire({
+                    icon: 'error',
+                    title: '입력 오류',
+                    text: '선택된 좌석 수와 참석 인원이 일치해야 합니다.',
+                    confirmButtonText: '확인'
+                });
+                return;
+            }
+
+            // 선택된 좌석을 seat1, seat2, seat3, seat4에 저장
+            setSeatsToForm();
+
+            const formData = new FormData(document.getElementById("applicationForm"));
+            fetch("/", {
+                method: "POST",
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const qrCanvas = generateQRCode(data.qr_data);
+                    Swal.fire({
+                        icon: 'success',
+                        title: '수정 완료',
+                        html: `
+                            ${currentName}님, 수정하신 6월 21일 공연 좌석은 ${selectedSeats.join(", ")} 입니다.<br><br>
+                            <div id="qrcode-container"></div>
+                            <div id="qr-link"><a href="${data.qr_link}" target="_blank">QR 코드 링크</a></div>
+                        `,
+                        didOpen: () => {
+                            document.getElementById("qrcode-container").appendChild(qrCanvas);
+                        },
+                        confirmButtonText: '확인'
+                    }).then(() => {
+                        window.close();
+                        setTimeout(() => {
+                            window.location.href = "{{ url_for('index') }}";
+                        }, 500);
+                    });
+                } else {
+                    Swal.fire({
+                        icon: 'error',
+                        title: '제출 실패',
+                        text: '제출 중 오류가 발생했습니다.',
+                        confirmButtonText: '확인'
+                    });
+                }
+            })
+            .catch(error => {
+                Swal.fire({
+                    icon: 'error',
+                    title: '제출 실패',
+                    text: '제출 중 오류가 발생했습니다: ' + error,
+                    confirmButtonText: '확인'
+                });
+            });
+        }
+
+        // 디바운싱을 적용한 이름/전화번호 입력 처리
+        function debounceCheckExisting() {
+            clearTimeout(debounceTimeout);
+            debounceTimeout = setTimeout(() => {
+                checkExisting();
+            }, 500);
+        }
+
+        nameInput.addEventListener("input", () => {
+            fetch("/all_seats")
+                .then(response => response.json())
+                .then(data => {
+                    renderGrid(data.seats);
+                    debounceCheckExisting();
+                });
+        });
+
+        contactInput.addEventListener("input", () => {
+            debounceCheckExisting();
+        });
+
+        attendees.addEventListener("change", () => {
+            document.querySelectorAll(".box.clicked").forEach(box => box.classList.remove("clicked"));
+            selectedCount = 0;
+            selectedSeats = [];
+            updateForm();
+            validateForm(); // 참석 인원 변경 후 validateForm 호출
+        });
+
+        const privacy = document.getElementById("privacy");
+        const form = document.getElementById("applicationForm");
+        const selectedSeatsInput = document.getElementById("selected_seats");
+
+        // 좌석 변경 여부 확인
+        function hasSeatsChanged() {
+            if (originalSeats.length !== selectedSeats.length) return true;
+            return !originalSeats.every((seat, index) => seat === selectedSeats[index]);
+        }
+
+        function validateForm() {
+            // 이름, 연락처, 참석 인원, 좌석 선택 여부 확인
+            const isFormValid = (
+                nameInput.value.trim() !== "" &&
+                contactInput.value.trim() !== "" &&
+                attendees.value !== "" &&
+                selectedCount === parseInt(attendees.value)
+            );
+
+            if (isFormValid) {
+                // 신규 방문 시에만 개인정보 동의 체크 확인
+                if (!hasShownWelcomeMessage && !privacy.checked) {
+                    submitBtn.disabled = true;
+                    submitBtn.classList.remove("enabled");
+                    modifyBtn.disabled = true;
+                    modifyBtn.classList.remove("enabled");
+                    return;
+                }
+
+                submitBtn.disabled = false;
+                submitBtn.classList.add("enabled");
+
+                // 재방문 시 수정 버튼 활성화 조건
+                if (hasShownWelcomeMessage) {
+                    if (hasSeatsChanged()) {
+                        modifyBtn.disabled = false;
+                        modifyBtn.classList.add("enabled");
+                    } else {
+                        modifyBtn.disabled = true;
+                        modifyBtn.classList.remove("enabled");
+                    }
+                }
+            } else {
+                submitBtn.disabled = true;
+                submitBtn.classList.remove("enabled");
+                modifyBtn.disabled = true;
+                modifyBtn.classList.remove("enabled");
+            }
+        }
+
+        function updateForm() {
+            selectedSeatsInput.value = selectedSeats.join(",");
+        }
+
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            if (selectedCount !== parseInt(attendees.value)) {
+                Swal.fire({
+                    icon: 'error',
+                    title: '입력 오류',
+                    text: '선택된 좌석 수와 참석 인원이 일치해야 합니다.',
+                    confirmButtonText: '확인'
+                });
+                return;
+            }
+
+            selectedSeatsInput.value = selectedSeats.join(",");
+
+            // 선택된 좌석을 seat1, seat2, seat3, seat4에 저장
+            setSeatsToForm();
+
+            const formData = new FormData(form);
+            fetch("/", {
+                method: "POST",
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (!hasShownWelcomeMessage) {
+                    if (data.success) {
+                        const qrCanvas = generateQRCode(data.qr_data);
+                        Swal.fire({
+                            icon: 'success',
+                            title: '예약 완료',
+                            html: `
+                                ${currentName}님, 6월 21일 공연 예약이 완료 되었습니다. 예약하신 좌석은 ${selectedSeats.join(", ")} 입니다.<br><br>
+                                <div id="qrcode-container"></div>
+                                <div id="qr-link"><a href="${data.qr_link}" target="_blank">QR 코드 링크</a></div>
+                            `,
+                            didOpen: () => {
+                                document.getElementById("qrcode-container").appendChild(qrCanvas);
+                            },
+                            confirmButtonText: '확인'
+                        }).then(() => {
+                            window.close();
+                            setTimeout(() => {
+                                window.location.href = "{{ url_for('index') }}";
+                            }, 500);
+                        });
+                    } else {
+                        Swal.fire({
+                            icon: 'error',
+                            title: '제출 실패',
+                            text: '제출 중 오류가 발생했습니다.',
+                            confirmButtonText: '확인'
+                        });
+                    }
+                } else {
+                    window.close();
+                    setTimeout(() => {
+                        window.location.href = "{{ url_for('index') }}";
+                    }, 500);
+                }
+            })
+            .catch(error => {
+                Swal.fire({
+                    icon: 'error',
+                    title: '제출 실패',
+                    text: '제출 중 오류가 발생했습니다: ' + error,
+                    confirmButtonText: '확인'
+                });
+            });
+        });
+
+        // 모든 입력 이벤트에서 validateForm 호출
+        nameInput.addEventListener("input", validateForm);
+        contactInput.addEventListener("input", validateForm);
+        attendees.addEventListener("change", validateForm);
+        privacy.addEventListener("change", validateForm);
+
+        // 초기 상태에서도 validateForm 호출
+        validateForm();
+        updateButtonVisibility(); // 초기 버튼 상태 설정
+    </script>
+</body>
+</html>

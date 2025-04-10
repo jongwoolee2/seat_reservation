@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>신청 목록</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: center;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        button {
+            padding: 5px 10px;
+            background-color: #ff0000;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #cc0000;
+        }
+        #clear-attendance {
+            margin: 20px 0;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        #clear-attendance:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <h2>신청 목록</h2>
+    <button id="clear-attendance" onclick="clearAttendance()">참석 Clear</button>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>이름</th>
+                <th>연락처</th>
+                <th>예약 날짜</th>
+                <th>좌석 1</th>
+                <th>좌석 2</th>
+                <th>좌석 3</th>
+                <th>좌석 4</th>
+                <th>참석 여부</th>
+                <th>삭제</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for app in applications %}
+            <tr>
+                <td>{{ app[0] }}</td>
+                <td>{{ app[1] }}</td>
+                <td>{{ app[2] }}</td>
+                <td>{{ app[3] }}</td>
+                <td>{{ app[4] }}</td>
+                <td>{{ app[5] }}</td>
+                <td>{{ app[6] }}</td>
+                <td>{{ app[7] }}</td>
+                <td>{{ app[8] }}</td> <!-- attend 값 표시 -->
+                <td><button onclick="deleteApplication({{ app[0] }})">삭제</button></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <script>
+        function deleteApplication(id) {
+            if (confirm("정말 삭제하시겠습니까?")) {
+                fetch("/delete_application", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                    body: `id=${id}`
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert("삭제되었습니다.");
+                        location.reload();
+                    } else {
+                        alert("삭제 실패: " + data.message);
+                    }
+                });
+            }
+        }
+
+        function clearAttendance() {
+            if (confirm("모든 참석 여부를 초기화하시겠습니까?")) {
+                fetch("/clear_attendance", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                    body: ""
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert("참석 여부가 초기화되었습니다.");
+                        location.reload();
+                    } else {
+                        alert("초기화 실패: " + data.message);
+                    }
+                });
+            }
+        }
+    </script>
+</body>
+</html>

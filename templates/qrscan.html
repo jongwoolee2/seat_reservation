@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR 코드 스캔</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- SweetAlert2 CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
+    <!-- Google Fonts: Noto Sans KR -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        #video-container {
+            text-align: center;
+            margin: 20px 0;
+        }
+        #video {
+            width: 100%;
+            max-width: 500px;
+            border: 2px solid #ccc;
+        }
+        #message {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 24px;
+            color: #333;
+            font-family: 'Noto Sans KR', sans-serif;
+            font-weight: 700;
+        }
+        #message p {
+            margin: 10px 0;
+        }
+        #stadiv {
+            background-color: #f0f0f0;
+            padding: 10px;
+            text-align: center;
+            font-weight: bold;
+            margin: 40px auto 10px auto;
+            width: 760px;
+        }
+        #grid {
+            display: grid;
+            grid-template-columns: repeat(17, 40px);
+            gap: 5px;
+            justify-content: center;
+            margin: 0 auto;
+            margin-bottom: 20px;
+        }
+        .box {
+            width: 40px;
+            height: 40px;
+            background-color: #e0e0e0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #ccc;
+            font-size: 12px;
+        }
+        .spacer {
+            width: 40px;
+            height: 40px;
+            background: transparent;
+        }
+        .reserved-selected {
+            background-color: #ff0000;
+            color: #fff;
+        }
+        #return-button {
+            display: none;
+            margin: 40px auto;
+            padding: 10px 20px;
+            background-color: #6c757d;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            text-align: center;
+        }
+        #return-button:hover {
+            background-color: #5a6268;
+        }
+    </style>
+</head>
+<body>
+    <h2 id="scan-title">QR 코드 스캔</h2>
+    <div id="video-container">
+        <video id="video" autoplay playsinline></video>
+    </div>
+    <div id="message">QR 코드를 카메라에 비춰주세요.</div>
+    <div id="stadiv" style="display: none;">무대</div>
+    <div id="grid" style="display: none;"></div>
+    <button id="return-button" onclick="returnToScan()">돌아가기</button>
+
+    <!-- SweetAlert2 JS -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
+    <!-- jsQR 라이브러리 추가 -->
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <script>
+        const video = document.getElementById("video");
+        const messageDiv = document.getElementById("message");
+        const scanTitle = document.getElementById("scan-title");
+        const videoContainer = document.getElementById("video-container");
+        const stadiv = document.getElementById("stadiv");
+        const grid = document.getElementById("grid");
+        const returnButton = document.getElementById("return-button");
+        let stream;
+        let isScanned = false; // 스캔 완료 여부를 추적
+
+        const columns = 17;
+        const rows = 11;
+        const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+        const gridData = Array(rows).fill().map(() => Array(columns).fill(null));
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < columns; col++) {
+                if (col === 8) continue;
+                const number = row + 1;
+                gridData[row][col] = letters[col < 8 ? col : col - 1] + number;
+            }
+        }
+
+        async function startCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+                video.srcObject = stream;
+                video.setAttribute("playsinline", true);
+                video.play();
+                requestAnimationFrame(tick);
+            } catch (error) {
+                console.error("카메라 접근 오류:", error);
+                messageDiv.textContent = "카메라에 접근할 수 없습니다.";
+            }
+        }
+
+        function renderGrid(selectedSeats = []) {
+            grid.innerHTML = "";
+            for (let row = 0; row < rows; row++) {
+                for (let col = 0; col < columns; col++) {
+                    if (col === 8) {
+                        const spacer = document.createElement("div");
+                        spacer.classList.add("spacer");
+                        grid.appendChild(spacer);
+                        continue;
+                    }
+
+                    const box = document.createElement("div");
+                    box.classList.add("box");
+                    const label = gridData[row][col];
+                    box.innerText = label;
+
+                    if (selectedSeats.includes(label)) {
+                        box.classList.add("reserved-selected");
+                    }
+
+                    grid.appendChild(box);
+                }
+            }
+            stadiv.style.display = "block";
+            grid.style.display = "grid";
+        }
+
+        function tick() {
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                const canvas = document.createElement("canvas");
+                canvas.height = video.videoHeight;
+                canvas.width = video.videoWidth;
+                const ctx = canvas.getContext("2d");
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                    inversionAttempts: "dontInvert",
+                });
+
+                if (code) {
+                    const encodedData = code.data;
+                    console.log("Scanned QR Code Data:", encodedData);
+                    fetch("/qrscan", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                        body: `encoded_data=${encodeURIComponent(encodedData)}`
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log("Server response:", data);
+                        if (data.success) {
+                            scanTitle.style.display = "none";
+                            videoContainer.style.display = "none";
+                            messageDiv.innerHTML = data.message.map(line => `<p>${line}</p>`).join('');
+                            renderGrid(data.seats);
+                            returnButton.style.display = "block";
+                            stopCamera();
+                            isScanned = true; // 스캔 완료 상태로 변경
+                            // 히스토리 상태 추가
+                            history.pushState({ scanned: true }, "", "");
+                        } else {
+                            messageDiv.innerHTML = data.message.map(line => `<p>${line}</p>`).join('');
+                        }
+                    })
+                    .catch(error => {
+                        console.error("Fetch error:", error);
+                        messageDiv.textContent = `서버 요청 중 오류가 발생했습니다: ${error.message}`;
+                    });
+                    return;
+                }
+            }
+            requestAnimationFrame(tick);
+        }
+
+        function stopCamera() {
+            if (stream) {
+                const tracks = stream.getTracks();
+                tracks.forEach(track => track.stop());
+                video.srcObject = null;
+            }
+        }
+
+        function returnToScan() {
+            scanTitle.style.display = "block";
+            videoContainer.style.display = "block";
+            messageDiv.textContent = "QR 코드를 카메라에 비춰주세요.";
+            stadiv.style.display = "none";
+            grid.style.display = "none";
+            returnButton.style.display = "none";
+            isScanned = false; // 스캔 상태 초기화
+            startCamera();
+        }
+
+        // 브라우저 뒤로 가기 이벤트 처리
+        window.addEventListener("popstate", (event) => {
+            if (isScanned) {
+                returnToScan();
+            }
+        });
+
+        // 키보드 Backspace 키 이벤트 처리
+        window.addEventListener("keydown", (event) => {
+            if (event.key === "Backspace" && isScanned) {
+                event.preventDefault(); // 기본 뒤로 가기 동작 방지
+                returnToScan();
+                // 히스토리 상태를 초기화하기 위해 pushState 호출
+                history.pushState({ scanned: false }, "", "");
+            }
+        });
+
+        window.addEventListener("load", startCamera);
+        window.addEventListener("beforeunload", stopCamera);
+    </script>
+</body>
+</html>
